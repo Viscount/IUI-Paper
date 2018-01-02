@@ -1,3 +1,4 @@
+import os
 import multiprocessing
 from abc import ABCMeta, abstractmethod
 import gensim
@@ -7,6 +8,7 @@ from tqdm import tqdm
 import pandas as pd
 
 from storyline.util import *
+from storyline.tool import *
 
 
 class FeatureModel(object):
@@ -68,10 +70,11 @@ class FeatureModel(object):
     def make_dataset(self, dataset_type):
         pass
 
-    def convert_coins(self, coins, alpha=1.1):
+    def convert_coins(self, coins, theta):
         coins = coins.astype(np.float32)
         coins = pd.Series(coins).interpolate().values
-        threshold = alpha * np.sum(coins) / len(coins)
+        #threshold = alpha * np.sum(coins) / len(coins)
+        threshold = theta * np.sum(coins)
         labels = (coins > threshold).astype(np.float32)
         return labels
 
@@ -125,13 +128,15 @@ class Doc2vecModel(FeatureModel):
             doc_vec = model.infer_vector(words)
         return doc_vec
 
-    def _make_sequence_dataset(self, season_list, output_file):
+    def _make_sequence_dataset(self, season_list, output_file, theta):
         X, Y = [], []
         # 1) Get list of sequences
         for season in season_list:
             #print(season)
+            if not os.path.exists(SEASON_COINS(season)):
+                continue
             eps_coins = np.load(SEASON_COINS(season))
-            label_seq = self.convert_coins(eps_coins[:,1])
+            label_seq = self.convert_coins(eps_coins[:,1], theta)
             #label_seq.reshape((1, len(label_seq)))
             Y.append(label_seq)
             #print(label_seq.shape)
@@ -158,13 +163,15 @@ class Doc2vecModel(FeatureModel):
         np.savez(output_file, **data)
         print(X.shape, Y.shape, seqlen.shape)
 
-    def _make_separate_dataset(self, season_list, output_file):
+    def _make_separate_dataset(self, season_list, output_file, theta):
         X, Y = [], []
         for season in season_list:
             #print(season)
+            if not os.path.exists(SEASON_COINS(season)):
+                continue
             eps_coins = np.load(SEASON_COINS(season))
             eps_seq = eps_coins[:,0]
-            label_seq = self.convert_coins(eps_coins[:,1])
+            label_seq = self.convert_coins(eps_coins[:,1], theta)
             for i,eps in enumerate(eps_seq):
                 eps_file = season + '/e%d_clean%s' % (eps, self.suffix)
                 X.append(np.load(eps_file).reshape([1, EMBED_SIZE]))
@@ -181,16 +188,18 @@ class Doc2vecModel(FeatureModel):
         :return:
         """
         print('Creating dataset.....')
+        theta = 0.3
         if data_type == 'seq':
-            self._make_sequence_dataset(self.train_list, TRAIN_DATA)
-            self._make_sequence_dataset(self.test_list, TEST_DATA)
+            self._make_sequence_dataset(self.train_list, TRAIN_DATA, theta)
+            self._make_sequence_dataset(self.test_list, TEST_DATA, theta)
         elif data_type == 'sep':
-            self._make_separate_dataset(self.train_list, TRAIN_DATA)
-            self._make_separate_dataset(self.test_list, TEST_DATA)
+            self._make_separate_dataset(self.train_list, TRAIN_DATA, theta)
+            self._make_separate_dataset(self.test_list, TEST_DATA, theta)
 
 if __name__ == '__main__':
     d2v = Doc2vecModel(EMBED_SIZE)
     model_file = '../.cache/sl_d2v_s%d' % (EMBED_SIZE)
     #d2v.train_model(model_file)
     #d2v.convert2vec_all(model_file)
-    d2v.make_dataset('seq')
+    #d2v.make_dataset('sep')
+    d2v.make_dataset('sep')

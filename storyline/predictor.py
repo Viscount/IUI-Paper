@@ -30,6 +30,7 @@ class BaseModel(object):
     def save_weights(self, sess, filename):
         weights = {}
         for v in tf.trainable_variables():
+            print(v.name)
             weights[v.name] = sess.run(v)
         np.savez(filename, **weights)
 
@@ -117,12 +118,45 @@ class LstmModel(BaseModel):
         self.layers = layers
         return layers['out/fc']
 
-    def train(self, batch_size, learning_rate, num_steps, weights_file, report_file):
+    def test(self, weights_file, output_file):
+        # (1) Get dataset
+        dataset = self.DataWrapper(TEST_DATA, is_validate=False)
+
+        # (2) Create network
+        X = tf.placeholder(tf.float32, [None, MAX_SEQ_LEN, EMBED_SIZE], name='X')
+        Y = tf.placeholder(tf.float32, [None, MAX_SEQ_LEN, self.num_classes], name='Y')
+        seqlen = tf.placeholder(tf.int32, [None], name='seqlen')
+        mask = tf.placeholder(tf.float32, [None, MAX_SEQ_LEN, self.num_classes], name='mask')
+        is_training = tf.placeholder(tf.bool, name='is_training')
+        with tf.variable_scope(self.name, reuse=None):
+            out = self.create_net(X, seqlen, is_training)
+
+        # (3) Start testing
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            sess.run(tf.local_variables_initializer())
+            for v in tf.trainable_variables():
+                weights = np.load(weights_file)
+                sess.run(v.assign(weights[v.name]))
+            batch_x, batch_y, batch_seqlen = dataset.next_batch(None)
+            batch_y = self._convert2onehot(batch_y)
+            batch_mask = self._seq2mask(batch_seqlen, True)
+            y_pred = sess.run(out, feed_dict={
+                X: batch_x, Y: batch_y, seqlen:batch_seqlen, mask: batch_mask, is_training: False})
+            res = self.report(np.argmax(batch_y, 2), np.argmax(y_pred, 2), batch_seqlen)
+            line = ''
+            line += '| Val_Accuracy: {:.4f}'.format(res['accuracy'])
+            line += '| Val_Precision: {:.4f}'.format(res['precision'])
+            line += '| Val_Recall: {:.4f}'.format(res['recall'])
+            print(line)
+
+
+    def train(self, batch_size, learning_rate, num_steps, weights_file, report_file, allin):
         # (1) Get dataset
         dataset = self.DataWrapper(TRAIN_DATA, is_validate=True)
         val_x, val_y, val_seqlen = dataset.val_data, dataset.val_label, dataset.val_seqlen
         val_y = self._convert2onehot(val_y)
-        val_mask = self._seq2mask(val_seqlen, True)
+        val_mask = self._seq2mask(val_seqlen, allin)
 
         # (2) Create network
         X = tf.placeholder(tf.float32, [None, MAX_SEQ_LEN, EMBED_SIZE], name='X')
@@ -151,7 +185,7 @@ class LstmModel(BaseModel):
                 batch_y = self._convert2onehot(batch_y)
                 # Subsampling seqlen
                 #batch_seqlen = np.array([np.random.randint(1, i+1) for i in batch_seqlen])
-                batch_mask = self._seq2mask(batch_seqlen, True)
+                batch_mask = self._seq2mask(batch_seqlen, allin)
                 sess.run(optimizer, feed_dict={X: batch_x, Y: batch_y, seqlen: batch_seqlen, mask: batch_mask,
                                                lr: learning_rate, is_training: True})
                 if step % 5000 == 0:
@@ -231,7 +265,6 @@ class ClassifyModel(BaseModel):
 
         with tf.variable_scope('h3'):
             layers['h3/fc'] = self._fc_layer(layers['h2/drop'], self.h3_size)
-            #layers['h3/res'] = tf.add(layers['h1/drop'], layers['h3/fc'])
             layers['h3/relu'] = self._relu_layer(layers['h3/fc'])
             layers['h3/drop'] = self._dropout_layer(layers['h3/relu'], 0.3, is_training)
 
@@ -240,6 +273,34 @@ class ClassifyModel(BaseModel):
 
         self.layers = layers
         return self.layers['out/fc']
+
+    def test(self, weights_file, report_file):
+        # (1) Get dataset
+        dataset = self.DataWrapper(TEST_DATA, is_validate=False)
+
+        # (2) Create network
+        X = tf.placeholder(tf.float32, [None, EMBED_SIZE], name='X')
+        Y = tf.placeholder(tf.float32, [None, self.num_classes], name='Y')
+        is_training = tf.placeholder(tf.bool, name='is_training')
+        with tf.variable_scope(self.name, reuse=None):
+            out = self.create_net(X, is_training)
+
+        # (3) Start training
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            sess.run(tf.local_variables_initializer())
+            for v in tf.trainable_variables():
+                weights = np.load(weights_file)
+                sess.run(v.assign(weights[v.name]))
+            batch_x, batch_y = dataset.next_batch(None)
+            batch_y = self._convert2onehot(batch_y)
+            y_pred = sess.run(out, feed_dict={X: batch_x, Y: batch_y, is_training: False})
+            res = self.report(np.argmax(batch_y, 1), np.argmax(y_pred, 1))
+            line = ''
+            line += '| Val_Accuracy: {:.4f}'.format(res['accuracy'])
+            line += '| Val_Precision: {:.4f}'.format(res['precision'])
+            line += '| Val_Recall: {:.4f}'.format(res['recall'])
+            print(line)
 
     def train(self, batch_size, learning_rate, num_steps, weights_file, report_file):
         # (1) Get dataset
@@ -275,7 +336,6 @@ class ClassifyModel(BaseModel):
                     y_pred, loss = sess.run([out, train_loss], feed_dict={X: val_x, Y: val_y, is_training: False})
                     res = self.report(np.argmax(val_y, 1), np.argmax(y_pred, 1))
                     line = 'Step: ' + str(step)
-                    line += '| Val_Loss: {:.4f}'.format(loss)
                     line += '| Val_Accuracy: {:.4f}'.format(res['accuracy'])
                     line += '| Val_Precision: {:.4f}'.format(res['precision'])
                     line += '| Val_Recall: {:.4f}'.format(res['recall'])
@@ -283,6 +343,19 @@ class ClassifyModel(BaseModel):
                     with open(report_file, 'a') as f:
                         f.write(line + '\n')
             self.save_weights(sess, weights_file)
+
+            # Have a test!
+            #test_data = self.DataWrapper(TEST_DATA, is_validate=False)
+            #test_x, test_y = test_data.next_batch(None)
+            #test_y = self._convert2onehot(test_y)
+            #y_pred, loss = sess.run([out, train_loss], feed_dict={X: test_x, Y: test_y, is_training: False})
+            #res = self.report(np.argmax(test_y, 1), np.argmax(y_pred, 1))
+            #line = ''
+            #line += '| Val_Loss: {:.4f}'.format(loss)
+            #line += '| Val_Accuracy: {:.4f}'.format(res['accuracy'])
+            #line += '| Val_Precision: {:.4f}'.format(res['precision'])
+            #line += '| Val_Recall: {:.4f}'.format(res['recall'])
+            #print(line)
 
     def report(self, y_real, y_pred):
         result = {}
@@ -295,7 +368,15 @@ class ClassifyModel(BaseModel):
 
 
 if __name__ == '__main__':
-    model_name = 'sl_d2vs%d_lstm_allin' % (EMBED_SIZE)
+    # THIM
+    model_name = 'sl_d2vs%d_cls_v2' % (EMBED_SIZE)
+    # out-of-date
+    #model_name = 'sl_d2vs%d_lstm_one_v2' % (EMBED_SIZE)
+    #allin = False
+    # ATHDM
+    #model_name = 'sl_d2vs%d_lstm_allin_v3' % (EMBED_SIZE)
+    #allin = True
+
     result_dir = '../result/' + model_name
     if os.path.exists(result_dir):
         shutil.rmtree(result_dir)
@@ -304,9 +385,14 @@ if __name__ == '__main__':
     test_file = '%s/test.txt' % (result_dir)
     weights_file = '../.cache/%s.npz' % (model_name)
 
-    #bincls_model = ClassifyModel('sl0')
-    #bincls_model.train(32, 1e-5, 50000, weights_file, train_file)
+    # THIM
+    bincls_model = ClassifyModel('sl2')
+    #bincls_model.train(32, 1e-5, 100000, weights_file, train_file)
+    # If run test separately, set reuse=None, otherwise True
+    bincls_model.test(weights_file, test_file)
 
-    lstm_model = LstmModel('sl1')
-    lstm_model.train(64, 1e-5, 100000, weights_file, train_file)
+    # ATHDM
+    #lstm_model = LstmModel('sl2')
+    #lstm_model.train(64, 1e-5, 100000, weights_file, train_file, allin)
+    #lstm_model.test(weights_file, test_file)
 
