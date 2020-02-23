@@ -28,6 +28,7 @@ DOI= http://dx.doi.org/10.1145/3172944.3172966
 
 * BL-906:</br>
 Baidu Clouddisk: https://pan.baidu.com/s/1jJujruA Access code: p9v7
+Mega Disk: https://mega.nz/#F!l1IhBIAB!4izVetuJBv15TQvDpKKmJw
 
 ### Formatting and Encoding
 The dataset files are written as sql dump files with **utf8mb4** charset. It's recommended to use Mysql to import the data through following two ways:
